@@ -3,6 +3,7 @@ import tempfile
 import json
 import os
 from pathlib import Path
+from datetime import date, timedelta
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
@@ -659,75 +660,117 @@ with tab_analyze:
 # ── Tab: History ──────────────────────────────────────────────────────────────
 with tab_history:
     if not db.is_configured():
-        st.info("💡 חיבור ל-Supabase לא הוגדר עדיין. לאחר הגדרת SUPABASE_URL ו-SUPABASE_KEY — ההיסטוריה תופיע כאן.")
+        st.info("Supabase not configured — set SUPABASE_URL and SUPABASE_KEY.")
     else:
-        if st.button("🔄 רענן היסטוריה"):
+        if st.button("🔄 Refresh"):
             st.rerun()
 
-        rows = db.load_call_history(limit=50)
-        if not rows:
-            st.info("אין שיחות שמורות עדיין.")
+        all_rows = db.load_call_history(limit=200)
+        if not all_rows:
+            st.info("No calls saved yet.")
         else:
-            # Cost summary
-            total_cost = 0.0
-            for row in rows:
-                an = (row.get("analyses") or [{}])[0]
-                fa = an.get("full_analysis") or {}
-                total_cost += (fa.get("_cost") or {}).get("total_cost_usd", 0)
-            if total_cost > 0:
-                st.markdown(f"""
-                <div style="background:#fff;border-radius:12px;padding:0.8rem 1.2rem;margin-bottom:1rem;
-                            border-right:4px solid #E31C3D;box-shadow:0 2px 8px rgba(0,0,0,0.06);">
-                    <span style="font-size:0.85rem;color:#666;">עלות כוללת ({len(rows)} שיחות אחרונות)</span>
-                    <span style="font-size:1.4rem;font-weight:900;color:#E31C3D;margin-right:1rem;">${total_cost:.4f}</span>
-                    <span style="font-size:0.8rem;color:#aaa;">≈ ₪{total_cost*3.7:.2f}</span>
-                </div>
-                """, unsafe_allow_html=True)
-
             call_type_heb = {"order": "הזמנה", "service": "שירות", "inquiry": "פנייה", "failed": "כישלון", "unknown": "—"}
+
+            # ── Filters ───────────────────────────────────────────────────────
+            branches_available = sorted({r.get("branch_name") or "—" for r in all_rows})
+            ctypes_available   = sorted({call_type_heb.get(r.get("call_type",""), "—") for r in all_rows})
+
+            with st.expander("🔍 Filters", expanded=False):
+                fc1, fc2, fc3, fc4 = st.columns(4)
+                with fc1:
+                    f_branches = st.multiselect("Branch", branches_available)
+                with fc2:
+                    f_ctypes = st.multiselect("Call type", ctypes_available)
+                with fc3:
+                    f_score = st.slider("Min agent score", 0, 10, 0)
+                with fc4:
+                    f_date_from = st.date_input("From", value=date.today() - timedelta(days=30))
+                    f_date_to   = st.date_input("To",   value=date.today())
+
+            def _passes_filters(row):
+                an     = (row.get("analyses") or [{}])[0]
+                branch = row.get("branch_name") or "—"
+                ctype  = call_type_heb.get(row.get("call_type",""), "—")
+                score  = an.get("agent_score") or 0
+                d_str  = (row.get("created_at") or "")[:10]
+                try:
+                    d = date.fromisoformat(d_str)
+                except Exception:
+                    d = date.today()
+                if f_branches and branch not in f_branches:
+                    return False
+                if f_ctypes and ctype not in f_ctypes:
+                    return False
+                if score < f_score:
+                    return False
+                if not (f_date_from <= d <= f_date_to):
+                    return False
+                return True
+
+            rows = [r for r in all_rows if _passes_filters(r)]
+
+            # ── Cost summary ──────────────────────────────────────────────────
+            total_cost = sum(
+                ((r.get("analyses") or [{}])[0].get("full_analysis") or {}).get("_cost", {}).get("total_cost_usd", 0)
+                for r in rows
+            )
+            st.markdown(f"""
+            <div style="background:#fff;border-radius:12px;padding:0.8rem 1.2rem;margin-bottom:1rem;
+                        border-right:4px solid #E31C3D;box-shadow:0 2px 8px rgba(0,0,0,0.06);
+                        display:flex;gap:2rem;align-items:center;">
+                <div>
+                    <div style="font-size:0.8rem;color:#666;">Showing</div>
+                    <div style="font-size:1.2rem;font-weight:900;">{len(rows)} / {len(all_rows)} calls</div>
+                </div>
+                {'<div><div style="font-size:0.8rem;color:#666;">Total cost</div><div style="font-size:1.2rem;font-weight:900;color:#E31C3D;">${:.4f} ≈ ₪{:.2f}</div></div>'.format(total_cost, total_cost*3.7) if total_cost > 0 else ''}
+            </div>
+            """, unsafe_allow_html=True)
+
+            if not rows:
+                st.info("No calls match the current filters.")
+
+            # ── Call list ─────────────────────────────────────────────────────
             for row in rows:
-                analyses = row.get("analyses") or [{}]
-                an = analyses[0] if analyses else {}
-                branch   = row.get("branch_name") or "—"
-                ctype    = call_type_heb.get(row.get("call_type",""), "—")
-                dur      = int(row.get("duration_seconds") or 0)
-                a_score  = an.get("agent_score")
-                c_score  = an.get("customer_score")
-                date_str = (row.get("created_at") or "")[:10]
-                filename = row.get("filename") or "—"
-                score_html = f'נציג: <strong>{a_score}/10</strong>' if a_score is not None else ""
-
-                fa       = an.get("full_analysis") or {}
+                analyses  = row.get("analyses") or [{}]
+                an        = analyses[0] if analyses else {}
+                branch    = row.get("branch_name") or "—"
+                ctype     = call_type_heb.get(row.get("call_type",""), "—")
+                dur       = int(row.get("duration_seconds") or 0)
+                a_score   = an.get("agent_score")
+                date_str  = (row.get("created_at") or "")[:10]
+                filename  = row.get("filename") or "—"
+                fa        = an.get("full_analysis") or {}
                 call_cost = (fa.get("_cost") or {}).get("total_cost_usd", 0)
-                cost_str  = f"  |  💰 ${call_cost:.4f}" if call_cost else ""
+                cost_str  = f"  |  ${call_cost:.4f}" if call_cost else ""
+                score_str = f"  |  {a_score}/10" if a_score is not None else ""
 
-                with st.expander(f"📞 {filename}  |  {branch}  |  {ctype}  |  {date_str}{cost_str}"):
+                with st.expander(f"📞 {filename}  |  {branch}  |  {ctype}  |  {date_str}{score_str}{cost_str}"):
                     col1, col2, col3 = st.columns(3)
-                    col1.metric("סניף", branch)
-                    col2.metric("ציון נציג", f"{a_score}/10" if a_score else "—")
-                    col3.metric("משך", f"{dur//60}:{dur%60:02d}")
+                    col1.metric("Branch", branch)
+                    col2.metric("Agent score", f"{a_score}/10" if a_score else "—")
+                    col3.metric("Duration", f"{dur//60}:{dur%60:02d}")
 
                     wa = an.get("whatsapp_summary","")
                     if wa:
-                        st.text_area("סיכום WhatsApp", value=wa, height=300, key=f"wa_{row['id']}")
+                        st.text_area("WhatsApp summary", value=wa, height=300, key=f"wa_{row['id']}")
 
-                    flags = an.get("flags") or {}
+                    flags   = an.get("flags") or {}
                     reasons = (flags.get("manual_review_reasons") or []) if isinstance(flags, dict) else []
                     if reasons:
                         st.warning("⚠️ " + " | ".join(reasons))
 
                     call_id = row.get("id","")
                     if call_id:
-                        st.markdown("**הוסף פידבק:**")
+                        st.markdown("**Add feedback:**")
                         fb_col1, fb_col2 = st.columns(2)
                         with fb_col1:
-                            fb_type = st.selectbox("סוג", ["comment","correction","flag"], key=f"fbt_{call_id}")
-                            fb_field = st.text_input("שדה (אופציונלי)", key=f"fbf_{call_id}")
+                            fb_type  = st.selectbox("Type", ["comment","correction","flag"], key=f"fbt_{call_id}")
+                            fb_field = st.text_input("Field (optional)", key=f"fbf_{call_id}")
                         with fb_col2:
-                            fb_orig = st.text_input("מה היה שגוי", key=f"fbo_{call_id}")
-                            fb_corr = st.text_input("מה נכון", key=f"fbc_{call_id}")
-                        fb_notes = st.text_area("הערות", key=f"fbn_{call_id}", height=80)
-                        if st.button("💾 שמור פידבק", key=f"save_fb_{call_id}"):
+                            fb_orig = st.text_input("Original value", key=f"fbo_{call_id}")
+                            fb_corr = st.text_input("Corrected value", key=f"fbc_{call_id}")
+                        fb_notes = st.text_area("Notes", key=f"fbn_{call_id}", height=80)
+                        if st.button("💾 Save feedback", key=f"save_fb_{call_id}"):
                             ok = db.save_feedback(call_id, current_user_name(), fb_type, fb_field, fb_orig, fb_corr, fb_notes)
                             if ok:
-                                st.success("פידבק נשמר ✓")
+                                st.success("Feedback saved.")
