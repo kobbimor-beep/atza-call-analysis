@@ -96,7 +96,9 @@ def transcribe_ensemble(audio_path: str) -> tuple[dict, list[str]]:
         f"דיוק {int(conf * 100)}%"
     )
 
-    if conf < CONFIDENCE_THRESHOLD:
+    openai_available = bool(os.getenv("OPENAI_API_KEY"))
+
+    if conf < CONFIDENCE_THRESHOLD and openai_available:
         steps.append(f"⚠️ דיוק נמוך ({int(conf*100)}%) — מפעיל Whisper לאימות...")
         whisper_text = transcribe_with_whisper(audio_path)
         steps.append("✅ Whisper הושלם — ממזג עם Claude...")
@@ -106,7 +108,10 @@ def transcribe_ensemble(audio_path: str) -> tuple[dict, list[str]]:
             f"דיוק סופי {int(result['transcription_confidence']*100)}%"
         )
     else:
-        steps.append(f"✅ דיוק גבוה ({int(conf*100)}%) — Whisper לא נדרש")
+        if conf < CONFIDENCE_THRESHOLD and not openai_available:
+            steps.append(f"⚠️ דיוק נמוך ({int(conf*100)}%) — Whisper לא זמין (אין OPENAI_API_KEY)")
+        else:
+            steps.append(f"✅ דיוק גבוה ({int(conf*100)}%) — Whisper לא נדרש")
         result["used_ensemble"] = False
 
     return result, steps
