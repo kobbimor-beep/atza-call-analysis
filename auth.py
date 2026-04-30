@@ -9,6 +9,13 @@ _SESSION_KEY = "atza_auth_v1"
 
 
 def _load_users() -> dict:
+    # On Streamlit Cloud — read users from st.secrets
+    try:
+        if "users" in st.secrets:
+            return dict(st.secrets["users"])
+    except Exception:
+        pass
+    # Local dev — read from auth_config.yaml
     if not os.path.exists(AUTH_CONFIG):
         return {}
     import yaml
@@ -36,8 +43,8 @@ def require_login() -> bool:
     if st.session_state.get(_SESSION_KEY):
         return True
 
-    if not os.path.exists(AUTH_CONFIG):
-        st.error("⚠️ קובץ auth_config.yaml לא נמצא. הרץ `python setup_auth.py` ליצירתו.")
+    if not _load_users():
+        st.error("⚠️ לא נמצאו משתמשים. הגדר [users] ב-Secrets או הרץ `python setup_auth.py` מקומית.")
         st.stop()
 
     st.markdown("""
