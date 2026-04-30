@@ -9,10 +9,27 @@ _SESSION_KEY = "atza_auth_v1"
 
 
 def _load_users() -> dict:
-    # On Streamlit Cloud — read users from st.secrets
+    # On Streamlit Cloud — read flat secrets: AUTH_USER_kobi_password, etc.
     try:
-        if "users" in st.secrets:
-            return dict(st.secrets["users"])
+        secrets = st.secrets
+        # Support flat format: AUTH_USER_<username>_password / name / role
+        users = {}
+        for key in secrets:
+            if key.startswith("AUTH_USER_"):
+                parts = key.split("_", 3)  # AUTH, USER, <username>, <field>
+                if len(parts) == 4:
+                    _, _, username, field = parts
+                    if username not in users:
+                        users[username] = {}
+                    users[username][field] = secrets[key]
+        if users:
+            return users
+        # Legacy nested format: [users.kobi]
+        if "users" in secrets:
+            result = {}
+            for uname in secrets["users"]:
+                result[uname] = dict(secrets["users"][uname])
+            return result
     except Exception:
         pass
     # Local dev — read from auth_config.yaml
