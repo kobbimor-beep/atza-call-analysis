@@ -51,8 +51,12 @@ create table if not exists analyses (
     customer_score  numeric,
     overall_score   numeric,
     whatsapp_summary text,
-    flags           jsonb
+    flags           jsonb,
+    cost_usd        numeric default 0
 );
+
+-- Migration: add cost_usd if upgrading from older schema
+-- alter table analyses add column if not exists cost_usd numeric default 0;
 
 -- Manager feedback / corrections
 create table if not exists feedback (
@@ -114,6 +118,8 @@ def save_call(
         if agent_score is not None and customer_score is not None:
             overall_score = round((agent_score + customer_score) / 2, 1)
 
+        cost_usd = (analysis.get("_cost") or {}).get("total_cost_usd", 0)
+
         analysis_row = {
             "call_id":         call_id,
             "full_analysis":   analysis,
@@ -122,6 +128,7 @@ def save_call(
             "overall_score":   overall_score,
             "whatsapp_summary": whatsapp_summary,
             "flags":           flags,
+            "cost_usd":        cost_usd,
         }
 
         sb.table("analyses").insert(analysis_row).execute()
@@ -191,6 +198,17 @@ def load_call_detail(call_id: str) -> dict | None:
         return row.data
     except Exception:
         return None
+
+
+def load_total_cost() -> dict:
+    """Returns {total_usd, call_count} from the analyses table."""
+    try:
+        sb   = _get_client()
+        rows = sb.table("analyses").select("cost_usd").execute()
+        costs = [r["cost_usd"] or 0 for r in (rows.data or [])]
+        return {"total_usd": round(sum(costs), 4), "call_count": len(costs)}
+    except Exception:
+        return {"total_usd": 0.0, "call_count": 0}
 
 
 def is_configured() -> bool:

@@ -219,6 +219,22 @@ with st.sidebar:
         <div style="font-size:0.8rem;color:#888;margin-bottom:1rem;">מנהל מחובר</div>
     </div>
     """, unsafe_allow_html=True)
+
+    if db.is_configured():
+        cost_data = db.load_total_cost()
+        total_usd = cost_data["total_usd"]
+        total_ils = total_usd * 3.7
+        n_calls   = cost_data["call_count"]
+        st.markdown(f"""
+        <div style="font-family:'Heebo',sans-serif;direction:rtl;
+                    background:#fff0f2;border-radius:10px;padding:0.8rem 1rem;
+                    margin-bottom:1rem;border-right:3px solid #E31C3D;">
+            <div style="font-size:0.75rem;color:#888;margin-bottom:0.2rem;">עלות כוללת ({n_calls} שיחות)</div>
+            <div style="font-size:1.6rem;font-weight:900;color:#E31C3D;line-height:1.1;">${total_usd:.4f}</div>
+            <div style="font-size:0.85rem;color:#666;">≈ ₪{total_ils:.2f}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
     if st.button("🚪 התנתקות", use_container_width=True):
         logout()
 
@@ -526,6 +542,26 @@ def display_report(analysis, transcript_data, filename=""):
     </div>
     """, unsafe_allow_html=True)
 
+    # Cost breakdown
+    cost = analysis.get("_cost", {})
+    if cost:
+        st.markdown(f"""
+        <div class="section-card" style="border-top:2px solid #0A0A0A;">
+            <div class="section-title">💰 עלות שיחה זו</div>
+            <div style="display:flex;gap:2rem;flex-wrap:wrap;font-size:0.95rem;">
+                <div><span style="color:#666;">Claude AI</span>&nbsp; <strong>${cost.get('cost_claude_usd', 0):.4f}</strong></div>
+                <div><span style="color:#666;">תמלול (AssemblyAI)</span>&nbsp; <strong>${cost.get('cost_aai_usd', 0):.4f}</strong></div>
+                <div style="border-right:2px solid #E31C3D;padding-right:1rem;">
+                    <span style="color:#E31C3D;font-weight:700;">סה״כ</span>&nbsp;
+                    <strong style="color:#E31C3D;">${cost.get('total_cost_usd', 0):.4f}</strong>
+                </div>
+                <div style="font-size:0.8rem;color:#aaa;">
+                    טוקנים: {cost.get('tokens_in',0):,} קלט / {cost.get('tokens_out',0):,} פלט
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
     # JSON export
     full_export = {"analysis": analysis, "transcript": transcript_data, "file": filename}
     st.download_button(
@@ -632,6 +668,22 @@ with tab_history:
         if not rows:
             st.info("אין שיחות שמורות עדיין.")
         else:
+            # Cost summary
+            total_cost = 0.0
+            for row in rows:
+                an = (row.get("analyses") or [{}])[0]
+                fa = an.get("full_analysis") or {}
+                total_cost += (fa.get("_cost") or {}).get("total_cost_usd", 0)
+            if total_cost > 0:
+                st.markdown(f"""
+                <div style="background:#fff;border-radius:12px;padding:0.8rem 1.2rem;margin-bottom:1rem;
+                            border-right:4px solid #E31C3D;box-shadow:0 2px 8px rgba(0,0,0,0.06);">
+                    <span style="font-size:0.85rem;color:#666;">עלות כוללת ({len(rows)} שיחות אחרונות)</span>
+                    <span style="font-size:1.4rem;font-weight:900;color:#E31C3D;margin-right:1rem;">${total_cost:.4f}</span>
+                    <span style="font-size:0.8rem;color:#aaa;">≈ ₪{total_cost*3.7:.2f}</span>
+                </div>
+                """, unsafe_allow_html=True)
+
             call_type_heb = {"order": "הזמנה", "service": "שירות", "inquiry": "פנייה", "failed": "כישלון", "unknown": "—"}
             for row in rows:
                 analyses = row.get("analyses") or [{}]
@@ -645,7 +697,11 @@ with tab_history:
                 filename = row.get("filename") or "—"
                 score_html = f'נציג: <strong>{a_score}/10</strong>' if a_score is not None else ""
 
-                with st.expander(f"📞 {filename}  |  {branch}  |  {ctype}  |  {date_str}"):
+                fa       = an.get("full_analysis") or {}
+                call_cost = (fa.get("_cost") or {}).get("total_cost_usd", 0)
+                cost_str  = f"  |  💰 ${call_cost:.4f}" if call_cost else ""
+
+                with st.expander(f"📞 {filename}  |  {branch}  |  {ctype}  |  {date_str}{cost_str}"):
                     col1, col2, col3 = st.columns(3)
                     col1.metric("סניף", branch)
                     col2.metric("ציון נציג", f"{a_score}/10" if a_score else "—")

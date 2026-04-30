@@ -144,7 +144,13 @@ def _validate_customer_satisfaction(cust: dict) -> dict:
     return cust
 
 
-def _call_claude(client, prompt: str, max_tokens: int = 4000) -> str:
+CLAUDE_COST_PER_M_IN  = 3.00   # USD per 1M input tokens
+CLAUDE_COST_PER_M_OUT = 15.00  # USD per 1M output tokens
+ASSEMBLYAI_COST_PER_MIN = 0.006167  # USD per audio minute (~$0.37/hr)
+
+
+def _call_claude(client, prompt: str, max_tokens: int = 4000) -> tuple[str, dict]:
+    """Returns (text, usage_dict) where usage_dict has tokens_in/out and cost_usd."""
     message = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=max_tokens,
@@ -156,7 +162,13 @@ def _call_claude(client, prompt: str, max_tokens: int = 4000) -> str:
         if raw.startswith("json"):
             raw = raw[4:]
         raw = raw.strip()
-    return raw
+
+    tokens_in  = message.usage.input_tokens
+    tokens_out = message.usage.output_tokens
+    cost_usd   = (tokens_in / 1_000_000) * CLAUDE_COST_PER_M_IN + \
+                 (tokens_out / 1_000_000) * CLAUDE_COST_PER_M_OUT
+
+    return raw, {"tokens_in": tokens_in, "tokens_out": tokens_out, "cost_claude_usd": round(cost_usd, 6)}
 
 
 def analyze_call(transcript_data: dict, branch_hint: dict | None = None) -> dict:
@@ -189,15 +201,30 @@ def analyze_call(transcript_data: dict, branch_hint: dict | None = None) -> dict
         transcript          = transcript_text,
     )
 
-    raw = _call_claude(client, prompt)
+    raw, usage = _call_claude(client, prompt)
 
     try:
         analysis = json.loads(raw)
     except json.JSONDecodeError:
-        # Retry once with a stricter instruction
         retry_prompt = prompt + "\n\nחשוב: החזר JSON בלבד. ללא שום טקסט לפני או אחרי."
-        raw = _call_claude(client, retry_prompt)
+        raw, usage2 = _call_claude(client, retry_prompt)
+        usage["tokens_in"]       += usage2["tokens_in"]
+        usage["tokens_out"]      += usage2["tokens_out"]
+        usage["cost_claude_usd"] += usage2["cost_claude_usd"]
         analysis = json.loads(raw)
+
+    # AssemblyAI cost estimate from audio duration
+    duration_min   = transcript_data["duration_seconds"] / 60
+    cost_aai_usd   = round(duration_min * ASSEMBLYAI_COST_PER_MIN, 6)
+    total_cost_usd = round(usage["cost_claude_usd"] + cost_aai_usd, 6)
+
+    analysis["_cost"] = {
+        "tokens_in":       usage["tokens_in"],
+        "tokens_out":      usage["tokens_out"],
+        "cost_claude_usd": round(usage["cost_claude_usd"], 6),
+        "cost_aai_usd":    cost_aai_usd,
+        "total_cost_usd":  total_cost_usd,
+    }
 
     # Validate customer satisfaction
     if "customer_satisfaction" in analysis:
