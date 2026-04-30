@@ -589,7 +589,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-tab_analyze, tab_history = st.tabs(["🎙️ ניתוח שיחה", "📚 היסטוריה"])
+tab_analyze, tab_history, tab_dashboard = st.tabs(["🎙️ ניתוח שיחה", "📚 היסטוריה", "📊 ביצועים"])
 
 # ── Tab: Analyze ──────────────────────────────────────────────────────────────
 with tab_analyze:
@@ -821,3 +821,131 @@ with tab_history:
                             ok = db.save_feedback(call_id, current_user_name(), fb_type, fb_field, fb_orig, fb_corr, fb_notes)
                             if ok:
                                 st.success("Feedback saved.")
+
+# ── Tab: Dashboard ────────────────────────────────────────────────────────────
+with tab_dashboard:
+    if not db.is_configured():
+        st.info("Supabase not configured.")
+    else:
+        dash_rows = db.load_call_history(limit=500)
+        if not dash_rows:
+            st.info("No data yet.")
+        else:
+            # Build flat records
+            records = []
+            for r in dash_rows:
+                an    = (r.get("analyses") or [{}])[0]
+                fa    = an.get("full_analysis") or {}
+                agent = fa.get("agent_performance", {})
+                cust  = fa.get("customer_satisfaction", {})
+                records.append({
+                    "branch":     r.get("branch_name") or "Unknown",
+                    "call_type":  r.get("call_type") or "unknown",
+                    "date":       (r.get("created_at") or "")[:10],
+                    "dur":        int(r.get("duration_seconds") or 0),
+                    "a_score":    an.get("agent_score"),
+                    "c_score":    an.get("customer_score"),
+                    "missed":     agent.get("missed_checkpoints") or [],
+                    "missed_conv": fa.get("missed_conversion", False),
+                    "flagged":    (fa.get("flags") or {}).get("manual_review_required", False),
+                })
+
+            total      = len(records)
+            scored     = [r for r in records if r["a_score"] is not None]
+            avg_score  = round(sum(r["a_score"] for r in scored) / len(scored), 1) if scored else 0
+            conv_rate  = round(sum(1 for r in records if r["call_type"] == "order") / total * 100, 1)
+            missed_conv_pct = round(sum(1 for r in records if r["missed_conv"]) / total * 100, 1)
+            flagged_pct     = round(sum(1 for r in records if r["flagged"]) / total * 100, 1)
+
+            # ── KPI row ───────────────────────────────────────────────────────
+            k1, k2, k3, k4, k5 = st.columns(5)
+            k1.metric("Total calls", total)
+            k2.metric("Avg agent score", f"{avg_score}/10")
+            k3.metric("Order rate", f"{conv_rate}%")
+            k4.metric("Missed conversions", f"{missed_conv_pct}%")
+            k5.metric("Flagged for review", f"{flagged_pct}%")
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            col_left, col_right = st.columns(2)
+
+            # ── Per-branch breakdown ──────────────────────────────────────────
+            with col_left:
+                st.markdown('<div class="section-card"><div class="section-title">📍 Performance by branch</div>', unsafe_allow_html=True)
+                branch_stats = {}
+                for r in records:
+                    b = r["branch"]
+                    if b not in branch_stats:
+                        branch_stats[b] = {"calls": 0, "scores": [], "orders": 0, "missed_conv": 0}
+                    branch_stats[b]["calls"] += 1
+                    if r["a_score"] is not None:
+                        branch_stats[b]["scores"].append(r["a_score"])
+                    if r["call_type"] == "order":
+                        branch_stats[b]["orders"] += 1
+                    if r["missed_conv"]:
+                        branch_stats[b]["missed_conv"] += 1
+
+                branch_rows = sorted(
+                    branch_stats.items(),
+                    key=lambda x: -(sum(x[1]["scores"]) / len(x[1]["scores"]) if x[1]["scores"] else 0)
+                )
+                for branch, s in branch_rows:
+                    avg = round(sum(s["scores"]) / len(s["scores"]), 1) if s["scores"] else None
+                    bar_w = int((avg or 0) / 10 * 100)
+                    color = "#4ED7C5" if (avg or 0) >= 8 else "#FFD400" if (avg or 0) >= 6 else "#E31C3D"
+                    st.markdown(f"""
+                    <div style="margin-bottom:0.8rem;">
+                        <div style="display:flex;justify-content:space-between;font-size:0.9rem;font-weight:600;">
+                            <span>{branch}</span>
+                            <span style="color:{color};">{avg}/10</span>
+                        </div>
+                        <div style="background:#F5F5F5;border-radius:4px;height:8px;margin:0.2rem 0;">
+                            <div style="width:{bar_w}%;background:{color};height:8px;border-radius:4px;"></div>
+                        </div>
+                        <div style="font-size:0.78rem;color:#888;">
+                            {s['calls']} calls &nbsp;·&nbsp; {s['orders']} orders &nbsp;·&nbsp; {s['missed_conv']} missed conversions
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            # ── Missed checkpoints breakdown ──────────────────────────────────
+            with col_right:
+                st.markdown('<div class="section-card"><div class="section-title">📋 Most missed checkpoints</div>', unsafe_allow_html=True)
+                checkpoint_counts = {}
+                for r in records:
+                    for cp in r["missed"]:
+                        checkpoint_counts[cp] = checkpoint_counts.get(cp, 0) + 1
+
+                if checkpoint_counts:
+                    sorted_cp = sorted(checkpoint_counts.items(), key=lambda x: -x[1])
+                    for cp, count in sorted_cp:
+                        pct = round(count / total * 100)
+                        st.markdown(f"""
+                        <div style="margin-bottom:0.7rem;">
+                            <div style="display:flex;justify-content:space-between;font-size:0.88rem;">
+                                <span>{cp}</span>
+                                <span style="color:#E31C3D;font-weight:700;">{pct}%</span>
+                            </div>
+                            <div style="background:#F5F5F5;border-radius:4px;height:6px;margin-top:0.2rem;">
+                                <div style="width:{pct}%;background:#E31C3D;height:6px;border-radius:4px;"></div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                else:
+                    st.info("No missed checkpoints recorded yet.")
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            # ── Call type distribution ────────────────────────────────────────
+            st.markdown('<div class="section-card"><div class="section-title">🏷️ Call type distribution</div>', unsafe_allow_html=True)
+            type_labels = {"order": "Order", "service": "Service", "inquiry": "Inquiry", "failed": "Failed", "unknown": "Unknown"}
+            type_counts = {}
+            for r in records:
+                t = type_labels.get(r["call_type"], r["call_type"])
+                type_counts[t] = type_counts.get(t, 0) + 1
+
+            dist_cols = st.columns(len(type_counts))
+            for i, (t, cnt) in enumerate(sorted(type_counts.items(), key=lambda x: -x[1])):
+                pct = round(cnt / total * 100)
+                dist_cols[i].metric(t, f"{cnt} ({pct}%)")
+            st.markdown('</div>', unsafe_allow_html=True)
