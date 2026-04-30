@@ -729,6 +729,49 @@ with tab_history:
             if not rows:
                 st.info("No calls match the current filters.")
 
+            # ── Full report viewer ────────────────────────────────────────────
+            if st.session_state.get("history_view_id"):
+                view_id  = st.session_state["history_view_id"]
+                view_row = next((r for r in all_rows if r.get("id") == view_id), None)
+                if view_row:
+                    view_an  = (view_row.get("analyses") or [{}])[0]
+                    view_fa  = view_an.get("full_analysis") or {}
+                    view_fn  = view_row.get("filename") or "—"
+                    stub_transcript = {
+                        "utterances":               [],
+                        "transcription_confidence": view_row.get("transcription_confidence", 0),
+                        "used_ensemble":            False,
+                        "duration_seconds":         view_row.get("duration_seconds", 0),
+                        "words_count":              view_row.get("words_count", 0),
+                    }
+                    st.markdown("---")
+                    bcol1, bcol2 = st.columns([1, 8])
+                    with bcol1:
+                        if st.button("✕ Close"):
+                            st.session_state.pop("history_view_id", None)
+                            st.rerun()
+                    with bcol2:
+                        st.markdown(f"**Full report — {view_fn}**")
+                    display_report(view_fa, stub_transcript, view_fn)
+
+                    call_id = view_row.get("id","")
+                    if call_id:
+                        st.markdown("---")
+                        st.markdown("**Add feedback:**")
+                        fb_col1, fb_col2 = st.columns(2)
+                        with fb_col1:
+                            fb_type  = st.selectbox("Type", ["comment","correction","flag"], key=f"vfbt_{call_id}")
+                            fb_field = st.text_input("Field (optional)", key=f"vfbf_{call_id}")
+                        with fb_col2:
+                            fb_orig = st.text_input("Original value", key=f"vfbo_{call_id}")
+                            fb_corr = st.text_input("Corrected value", key=f"vfbc_{call_id}")
+                        fb_notes = st.text_area("Notes", key=f"vfbn_{call_id}", height=80)
+                        if st.button("💾 Save feedback", key=f"vsave_fb_{call_id}"):
+                            ok = db.save_feedback(call_id, current_user_name(), fb_type, fb_field, fb_orig, fb_corr, fb_notes)
+                            if ok:
+                                st.success("Feedback saved.")
+                    st.markdown("---")
+
             # ── Call list ─────────────────────────────────────────────────────
             for row in rows:
                 analyses  = row.get("analyses") or [{}]
@@ -745,14 +788,18 @@ with tab_history:
                 score_str = f"  |  {a_score}/10" if a_score is not None else ""
 
                 with st.expander(f"📞 {filename}  |  {branch}  |  {ctype}  |  {date_str}{score_str}{cost_str}"):
-                    col1, col2, col3 = st.columns(3)
+                    col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
                     col1.metric("Branch", branch)
                     col2.metric("Agent score", f"{a_score}/10" if a_score else "—")
                     col3.metric("Duration", f"{dur//60}:{dur%60:02d}")
+                    with col4:
+                        if st.button("📋 Full report", key=f"view_{row['id']}"):
+                            st.session_state["history_view_id"] = row["id"]
+                            st.rerun()
 
                     wa = an.get("whatsapp_summary","")
                     if wa:
-                        st.text_area("WhatsApp summary", value=wa, height=300, key=f"wa_{row['id']}")
+                        st.text_area("WhatsApp summary", value=wa, height=200, key=f"wa_{row['id']}")
 
                     flags   = an.get("flags") or {}
                     reasons = (flags.get("manual_review_reasons") or []) if isinstance(flags, dict) else []
