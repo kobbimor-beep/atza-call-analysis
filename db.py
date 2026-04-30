@@ -200,6 +200,23 @@ def load_call_detail(call_id: str) -> dict | None:
         return None
 
 
+def load_feedback_corrections(limit: int = 50) -> list[dict]:
+    """Returns correction-type feedback rows for prompt injection."""
+    try:
+        sb = _get_client()
+        rows = (
+            sb.table("feedback")
+            .select("field_corrected, original_value, corrected_value, notes, feedback_type")
+            .in_("feedback_type", ["correction", "comment"])
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return rows.data or []
+    except Exception:
+        return []
+
+
 def load_total_cost() -> dict:
     """Returns {total_usd, call_count} from the analyses table."""
     try:
