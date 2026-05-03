@@ -94,7 +94,6 @@ def transcribe_call(audio_path: str) -> dict:
 
     config = aai.TranscriptionConfig(
         language_code="he",
-        speech_model=aai.SpeechModel.best,
         speaker_labels=True,
         sentiment_analysis=False,
         disfluencies=False,
