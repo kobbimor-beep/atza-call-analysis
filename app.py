@@ -627,11 +627,9 @@ with tab_analyze:
                     st.write("🤖 מנתח עם Claude AI...")
                     analysis = analyze_call(transcript_data, branch_hint=branch_result)
 
-                    # Generate WhatsApp summary
                     wa_summary = generate_whatsapp_summary(analysis)
                     analysis["_whatsapp_summary"] = wa_summary
 
-                    # Save to DB (silent if not configured)
                     if db.is_configured():
                         st.write("💾 שומר ל-DB...")
                         db.save_call(transcript_data, analysis, uploaded.name, wa_summary)
@@ -639,23 +637,34 @@ with tab_analyze:
                     st.write("✅ ניתוח הושלם")
                     status.update(label="✅ הדוח מוכן!", state="complete", expanded=False)
 
-                st.markdown("---")
-                display_report(analysis, transcript_data, uploaded.name)
-
-                # WhatsApp summary box
-                st.markdown("### 📱 סיכום לשליחה ב-WhatsApp")
-                st.text_area(
-                    label="העתק והדבק בווצאפ לנציג",
-                    value=wa_summary,
-                    height=400,
-                    label_visibility="visible",
-                )
+                # Save to session state so report survives widget interactions
+                st.session_state["last_analysis"]        = analysis
+                st.session_state["last_transcript"]      = transcript_data
+                st.session_state["last_filename"]        = uploaded.name
+                st.session_state["last_wa_summary"]      = wa_summary
 
             except Exception as e:
                 st.error(f"שגיאה: {e}")
                 raise
             finally:
                 os.unlink(tmp_path)
+
+        # Render from session state — persists through reruns
+        if st.session_state.get("last_analysis") and st.session_state.get("last_filename") == uploaded.name:
+            analysis       = st.session_state["last_analysis"]
+            transcript_data = st.session_state["last_transcript"]
+            wa_summary     = st.session_state["last_wa_summary"]
+
+            st.markdown("---")
+            display_report(analysis, transcript_data, uploaded.name)
+
+            st.markdown("### 📱 סיכום לשליחה ב-WhatsApp")
+            st.text_area(
+                label="העתק והדבק בווצאפ לנציג",
+                value=wa_summary,
+                height=400,
+                label_visibility="visible",
+            )
 
 # ── Tab: History ──────────────────────────────────────────────────────────────
 with tab_history:
